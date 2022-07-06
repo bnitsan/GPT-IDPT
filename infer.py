@@ -48,19 +48,19 @@ class ModelConfig:
 
 model_config = ModelConfig()
 
-# model = GPT2LMHeadModel.from_pretrained(model_config.model_name)
-# model.resize_token_embeddings(len(tokenizer))
+model = GPT2LMHeadModel.from_pretrained(model_config.model_name)
+model.resize_token_embeddings(len(tokenizer))
 
-model_px = GPT2TrainedPromptX(model_config)
+model_p = GPT2TrainedPrompt(model_config)
 
 # load state dict to model
-model_px.load_state_dict(torch.load('model_px_wiki_qa_state_dict.pt'))
+model.load_state_dict(torch.load('model0_wiki_bio_state_dict.pt'))
 
-model = model_px
+# model = model_p
 
 ds_names = ["wiki_qa", "wiki_bio", "samsum"]
 
-ds_name_i = ds_names[0]
+ds_name_i = ds_names[1]
 
 val_dataloader = get_val_dl(ds_name_i, tokenizer, infer_conf)
 sum_f1 = 0
