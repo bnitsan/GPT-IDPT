@@ -212,10 +212,6 @@ class GPT2TrainedPromptX(nn.Module):
         
         lm_logits = transformer_outputs[0]
 
-        # extend labels to account for p(x) tokens
-        labels_px = torch.zeros(labels.shape[0], self.last_tokens_to_keep).to(labels.device) + 0.5
-        labels = torch.cat([labels_px, labels], 1)
-        labels = labels.long()
 
         # Set device for model parallelism
         # if self.model_parallel:
@@ -224,6 +220,11 @@ class GPT2TrainedPromptX(nn.Module):
 
         loss = None
         if labels is not None:
+            # extend labels to account for p(x) tokens
+            labels_px = torch.zeros(labels.shape[0], self.last_tokens_to_keep).to(labels.device) + 0.5
+            labels = torch.cat([labels_px, labels], 1)
+            labels = labels.long()
+
             # Shift so that tokens < n predict n
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()

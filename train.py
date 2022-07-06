@@ -1,6 +1,7 @@
 '''
     This module was written in a rush, so it's not pretty.
     We would like to compare the performance of ~3 models on ~3 datasets (or a combination of them).
+    We first train all three models on all three datasets + a combination of the datasets -- resulting in 12 models.
 '''
 
 

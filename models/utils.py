@@ -18,7 +18,8 @@ def set_seed(seed):
 def top_k_logits(logits, k):
     v, ix = torch.topk(logits, k)
     out = logits.clone()
-    out[out < v[:, [-1]]] = -float('Inf')
+    #out[out < v[:, [-1]]] = -float('Inf')
+    out[out < min(v)] = -float('Inf')
     return out
 
 
@@ -35,7 +36,8 @@ def sample(model, batch, steps, tokenizer, temperature=1.0, sample=False, top_k=
     x_in = batch['source_ids']
     x_mask = batch['source_mask']
     for k in range(steps):
-        logits, _ = model(input_ids=x_in, attention_mask=x_mask, return_dict=False)
+        model_output = model(input_ids=x_in, attention_mask=x_mask, return_dict=False)
+        logits = model_output[0]
         # pluck the logits at the final step and scale by temperature
         logits = logits[0, -1, :] / temperature
         # optionally crop probabilities to only the top k options

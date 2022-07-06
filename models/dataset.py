@@ -121,6 +121,7 @@ class CustomDataset(Dataset):
         source_mask = source["attention_mask"].squeeze()
 
         target_ids = target["input_ids"].squeeze()
+        target_mask = target["attention_mask"].squeeze()
 
         ''' Because the model is autoregressive, we return:
             "input_ids"      - the full text of an example
@@ -135,4 +136,5 @@ class CustomDataset(Dataset):
             "source_ids": source_ids.to(dtype=torch.long),
             "source_mask": source_mask.to(dtype=torch.long),
             "target_ids": target_ids.to(dtype=torch.long),
+            "target_mask": target_mask.to(dtype=torch.long),
         }
