@@ -1,5 +1,5 @@
 """
-    This module was written in a rush, so it's not pretty and some stuff are hard-coded.
+    This module was written in a rush, so it's not so pretty and some stuff are hard-coded.
     We would like to compare the performance of ~3 models on ~3 datasets (or a combination of them).
     We first train all three models on all three datasets + a combination of the datasets -- resulting in 12 models.
     We save the output models to a folder "model_weights".
@@ -38,12 +38,12 @@ model_config = Config()
 # training configuration
 train_conf = TrainerConfig(max_epochs=1,
                            batch_size=16,
-                           learning_rate=0.012,
+                           learning_rate=0.005,
                            lr_decay=True,
                            warmup_tokens=10,  # 512*20,
                            final_tokens=5000,  # 2*len(train_dataset)*block_size,
                            num_workers=1,
-                           num_examples_per_ds=2500,
+                           num_examples_per_ds=700,
                            num_examples_per_test_ds=300,
                            max_tokenized=200)
 
@@ -68,10 +68,10 @@ for ds_name_i in ds_names:
 # another run: train on the concatenated datasets
 model0 = GPT2LMHeadModel.from_pretrained(model_config.model_name)
 model0.resize_token_embeddings(len(tokenizer))
-train_model_concat(model0, 'model0', train_conf, 'combined', tokenizer)
+train_model_concat(model0, 'model0', train_conf, ds_names, 'combined', tokenizer)
 
 model_p = GPT2TrainedPrompt(model_config)
-train_model_concat(model_p, 'model_p', train_conf, 'combined', tokenizer)
+train_model_concat(model_p, 'model_p', train_conf, ds_names, 'combined', tokenizer)
 
 model_px = GPT2TrainedPromptX(model_config)
-train_model_concat(model_px, 'model_px', train_conf, 'combined', tokenizer)
+train_model_concat(model_px, 'model_px', train_conf, ds_names, 'combined', tokenizer)

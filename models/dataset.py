@@ -37,6 +37,15 @@ class CustomDataset(Dataset):
         self.target_texts = [self.target_texts[i] for i in random_selection]
         self.full_texts = [self.full_texts[i] for i in random_selection]
 
+    # In some cases the split names are inconsistent. This deals with that. d - datasetdict, split - split name
+    def check_split_name(self, d):
+        if self.split_type == "validation":
+            if self.split_type in d:
+                return self.split_type
+            else:
+                return 'val'
+        return self.split_type
+
     """
         For a 'name' of HuggingFace dataset among a subset list (samsum, wiki_bio, wiki_qa, ...), 
         this codes and returns the data in terms of 'sources, targets'.
@@ -45,6 +54,8 @@ class CustomDataset(Dataset):
     """
     def get_dataset(self, name):
         dataset = load_dataset(name)
+        self.split_type = self.check_split_name(dataset)
+
         dataset = dataset[self.split_type]
         if name == 'samsum':
             source_feature = 'dialogue'

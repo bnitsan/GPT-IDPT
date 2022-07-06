@@ -7,6 +7,12 @@ import wandb
 from pathlib import Path
 import os
 
+from models.trainer import Trainer
+
+from models.dataset import CustomDataset
+from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset
+
 
 def set_seed(seed):
     random.seed(seed)
@@ -53,7 +59,7 @@ def sample(model, batch, steps, tokenizer, temperature=1.0, sample=False, top_k=
         # append to the sequence and continue
         x_in = torch.cat((x_in, ix.unsqueeze(0)), dim=1)
         x_mask = torch.cat([x_mask, torch.ones((1, 1))], 1)
-        if ix - 1 >= len(tokenizer) - 2:  # pure laziness. Should be more careful on eos/pad tokens
+        if ix == tokenizer.eos_token_id:
             break
     return x_in
 
@@ -101,7 +107,7 @@ def train_model_db(model, name, train_config, ds_name, tokenizer):
                                  batch_size=train_config.batch_size,
                                  num_workers=train_config.num_workers)
     # Create the trainer
-    model_train = Trainer(model, train_dataloader, test_dataloader, train_conf,
+    model_train = Trainer(model, train_dataloader, test_dataloader, train_config,
                           wandb=wandb)  # the None is for test_dataset
     # model train
     model_train.train()
@@ -109,7 +115,7 @@ def train_model_db(model, name, train_config, ds_name, tokenizer):
     torch.save(model.state_dict(), 'model_weights/' + name + '_' + ds_name + '_state_dict.pt')
 
 
-def get_concat_dl(ds_names, train_config):
+def get_concat_dl(ds_names, train_config, tokenizer):
     set_seed(1)
 
     train_ds = CustomDataset(ds_names[0],
@@ -143,15 +149,54 @@ def get_concat_dl(ds_names, train_config):
         return train_dataloader, test_dataloader
 
 
-def train_model_concat(model, name, train_config, ds_name, tokenizer):
+def get_concat_dl_val(ds_names, train_config, tokenizer):
+    set_seed(1)
+
+    val_ds = CustomDataset(ds_names[0],
+                           tokenizer,
+                           num_examples=train_config.num_examples_per_test_ds,
+                           split_type='validation',
+                           max_len=train_config.max_tokenized)
+    for i in range(1, len(ds_names)):
+        val_ds_i = CustomDataset(ds_names[i],
+                                 tokenizer,
+                                 num_examples=train_config.num_examples_per_test_ds,
+                                 split_type='train',
+                                 max_len=train_config.max_tokenized)
+        val_ds = ConcatDataset([val_ds, val_ds_i])
+
+        val_dataloader = DataLoader(val_ds, shuffle=True,
+                                    batch_size=train_config.batch_size, num_workers=train_config.num_workers)
+        return val_dataloader
+
+
+def train_model_concat(model, name, train_config, ds_names, path_name, tokenizer):
     # Initialize wandb
     wandb = initialize_wandb(train_config)
 
-    train_dataloader, test_dataloader = get_concat_dl(ds_names, train_config)
+    train_dataloader, test_dataloader = get_concat_dl(ds_names, train_config, tokenizer)
     # Create the trainer
-    model_train = Trainer(model, train_dataloader, test_dataloader, train_conf,
+    model_train = Trainer(model, train_dataloader, test_dataloader, train_config,
                           wandb=wandb)  # the None is for test_dataset
     # model train
     model_train.train()
 
-    torch.save(model.state_dict(), 'model_weights/' + name + '_' + ds_name + '_state_dict.pt')
+    torch.save(model.state_dict(), 'model_weights/' + name + '_' + path_name + '_state_dict.pt')
+
+
+def get_val_dl(ds_name, tokenizer, infer_config):
+    set_seed(1)
+    # check if ds_name is list of strings or single string
+    if isinstance(ds_name, list):
+        val_dataloader = get_concat_dl_val(ds_name, infer_config, tokenizer)
+    else:
+        val_ds = CustomDataset(ds_name,
+                               tokenizer,
+                               num_examples=infer_config.num_examples_per_test_ds,
+                               split_type='validation',
+                               max_len=infer_config.max_tokenized)
+        val_dataloader = DataLoader(val_ds,
+                                    shuffle=True,
+                                    batch_size=infer_config.batch_size,
+                                    num_workers=infer_config.num_workers)
+    return val_dataloader
