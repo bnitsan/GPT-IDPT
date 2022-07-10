@@ -42,6 +42,7 @@ class TrainerConfig:
     num_workers = 0  # for DataLoader
     wandb_flag = True
     num_examples_per_ds = 100
+    max_char_len = 1000
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():

@@ -31,7 +31,7 @@ def top_k_logits(logits, k):
 
 # based on https://github.com/karpathy/minGPT/blob/master/mingpt/utils.py
 @torch.no_grad()
-def sample(model, batch, steps, tokenizer, temperature=1.0, sample=False, top_k=None):
+def sample(model, source_ids, source_mask, steps, tokenizer, temperature=1.0, sample=False, top_k=None):
     """
     take a conditioning sequence of indices in x (of shape (b,t)) and predict the next token in
     the sequence, feeding the predictions back into the model each time. Clearly the sampling
@@ -39,9 +39,11 @@ def sample(model, batch, steps, tokenizer, temperature=1.0, sample=False, top_k=
     of block_size, unlike an RNN that has an infinite context window.
     """
     model.eval()
-    x_in = batch['source_ids']
-    x_mask = batch['source_mask']
+    x_in = source_ids
+    x_mask = source_mask
     for k in range(steps):
+        print(x_in)
+        print(x_mask)
         model_output = model(input_ids=x_in, attention_mask=x_mask, return_dict=False)
         logits = model_output[0]
         # pluck the logits at the final step and scale by temperature
@@ -52,10 +54,19 @@ def sample(model, batch, steps, tokenizer, temperature=1.0, sample=False, top_k=
         # apply softmax to convert to probabilities
         probs = F.softmax(logits, dim=-1)
         # sample from the distribution or take the most likely
+
+        # set probs to zero at the location of the padding token
+        probs[tokenizer.pad_token_id] = 0.0
+
+        # repetition of the last token is not allowed
+        if k > 0:
+            probs[ix] = 0.0
+
+        # sampling
         if sample:
             ix = torch.multinomial(probs, num_samples=1)
         else:
-            _, ix = torch.topk(probs, k=1, dim=-1)
+            _, ix = torch.topk(probs, k=3, dim=-1)
         # append to the sequence and continue
         x_in = torch.cat((x_in, ix.unsqueeze(0)), dim=1)
         x_mask = torch.cat([x_mask, torch.ones((1, 1))], 1)
@@ -92,7 +103,8 @@ def train_model_db(model, name, train_config, ds_name, tokenizer):
                              tokenizer,
                              num_examples=train_config.num_examples_per_ds,
                              split_type='train',
-                             max_len=train_config.max_tokenized)
+                             max_tok_len=train_config.max_tokenized,
+                             max_char_len=train_config.max_char_len)
     train_dataloader = DataLoader(train_ds,
                                   shuffle=True,
                                   batch_size=train_config.batch_size,
@@ -101,7 +113,8 @@ def train_model_db(model, name, train_config, ds_name, tokenizer):
                             tokenizer,
                             num_examples=train_config.num_examples_per_test_ds,
                             split_type='test',
-                            max_len=train_config.max_tokenized)
+                            max_tok_len=train_config.max_tokenized,
+                            max_char_len=train_config.max_char_len)
     test_dataloader = DataLoader(test_ds,
                                  shuffle=True,
                                  batch_size=train_config.batch_size,
@@ -122,23 +135,27 @@ def get_concat_dl(ds_names, train_config, tokenizer):
                              tokenizer,
                              num_examples=train_config.num_examples_per_ds,
                              split_type='train',
-                             max_len=train_config.max_tokenized)
+                             max_tok_len=train_config.max_tokenized,
+                             max_char_len=train_config.max_char_len)
     test_ds = CustomDataset(ds_names[0],
                             tokenizer,
                             num_examples=train_config.num_examples_per_ds,
                             split_type='test',
-                            max_len=train_config.max_tokenized)
+                            max_tok_len=train_config.max_tokenized,
+                            max_char_len=train_config.max_char_len)
     for i in range(1, len(ds_names)):
         train_ds_i = CustomDataset(ds_names[i],
                                    tokenizer,
                                    num_examples=train_config.num_examples_per_ds,
                                    split_type='train',
-                                   max_len=train_config.max_tokenized)
+                                   max_tok_len=train_config.max_tokenized,
+                                   max_char_len=train_config.max_char_len)
         test_ds_i = CustomDataset(ds_names[i],
                                   tokenizer,
                                   num_examples=train_config.num_examples_per_ds,
                                   split_type='test',
-                                  max_len=train_config.max_tokenized)
+                                  max_tok_len=train_config.max_tokenized,
+                                  max_char_len=train_config.max_char_len)
         train_ds = ConcatDataset([train_ds, train_ds_i])
         test_ds = ConcatDataset([test_ds, test_ds_i])
 
@@ -156,13 +173,15 @@ def get_concat_dl_val(ds_names, train_config, tokenizer):
                            tokenizer,
                            num_examples=train_config.num_examples_per_test_ds,
                            split_type='validation',
-                           max_len=train_config.max_tokenized)
+                           max_tok_len=train_config.max_tokenized,
+                           max_char_len=train_config.max_char_len)
     for i in range(1, len(ds_names)):
         val_ds_i = CustomDataset(ds_names[i],
                                  tokenizer,
                                  num_examples=train_config.num_examples_per_test_ds,
                                  split_type='train',
-                                 max_len=train_config.max_tokenized)
+                                 max_tok_len=train_config.max_tokenized,
+                                 max_char_len=train_config.max_char_len)
         val_ds = ConcatDataset([val_ds, val_ds_i])
 
         val_dataloader = DataLoader(val_ds, shuffle=True,
@@ -194,7 +213,8 @@ def get_val_dl(ds_name, tokenizer, infer_config):
                                tokenizer,
                                num_examples=infer_config.num_examples_per_test_ds,
                                split_type='validation',
-                               max_len=infer_config.max_tokenized)
+                               max_tok_len=infer_config.max_tokenized,
+                               max_char_len=infer_config.max_char_len)
         val_dataloader = DataLoader(val_ds,
                                     shuffle=True,
                                     batch_size=infer_config.batch_size,

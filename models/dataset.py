@@ -3,7 +3,9 @@ import torch
 import json
 import random
 from datasets import load_dataset
-random.seed(0)
+import pandas as pd
+
+# random.seed(0)
 
 
 class CustomDataset(Dataset):
@@ -12,8 +14,8 @@ class CustomDataset(Dataset):
     loading it into the dataloader to pass it to the
     neural network for finetuning the model
     """
-    
-    def __init__(self, ds_name, tokenizer, num_examples, split_type, max_len=512):
+
+    def __init__(self, ds_name, tokenizer, num_examples, split_type, max_tok_len=512, max_char_len=1500):
         """
         Initializes a Dataset class
 
@@ -22,20 +24,18 @@ class CustomDataset(Dataset):
             tokenizer (transformers.tokenizer): Transformers tokenizer
             num_examples (int): number of examples to sample out of the dataset
             split_type (string): 'train'/'test'/'validation' split of the dataset
-            max_len (int): maximum length of tokenized data
+            max_tok_len (int): maximum length of tokenized data.
+            max_tok_len (int): maximum length of characters in example data.
+                               Longer examples are rejected. Done before tokenization.
         """
         self.tokenizer = tokenizer
         self.ds_name = ds_name
         self.num_examples = num_examples
         self.split_type = split_type
-        self.max_len = max_len
+        self.max_tok_len = max_tok_len
+        self.max_char_len = max_char_len
 
-        self.full_texts, self.source_texts, self.target_texts = self.get_dataset(self.ds_name)
-
-        random_selection = random.sample(range(len(self.source_texts)), self.num_examples)
-        self.source_texts = [self.source_texts[i] for i in random_selection]
-        self.target_texts = [self.target_texts[i] for i in random_selection]
-        self.full_texts = [self.full_texts[i] for i in random_selection]
+        self.df = self.get_dataset(self.ds_name)
 
     # In some cases the split names are inconsistent. This deals with that. d - datasetdict, split - split name
     def check_split_name(self, d):
@@ -52,65 +52,85 @@ class CustomDataset(Dataset):
         Since some datasets have several input/output, one should be careful in using this
         to compare to general benchmarks without comparing the protocols first.
     """
+
     def get_dataset(self, name):
         dataset = load_dataset(name)
-        self.split_type = self.check_split_name(dataset)
 
-        dataset = dataset[self.split_type]
+        self.split_type = self.check_split_name(dataset)  # check if the split name is consistent w/ dataset definition
+        dataset = dataset[self.split_type]  # select the split - train, test, validation
+
+        sources = None  # initialize the list of source text to None, allow exception later
         if name == 'samsum':
             source_feature = 'dialogue'
             target_feature = 'summary'
             sources = dataset[source_feature]
             targets = dataset[target_feature]
 
-            sources = ['Dialogue:\n'+ s for s in sources]
-            targets = ['\nSummary: '+t for t in targets]
+            sources = ['Dialogue:\n' + s for s in sources]
+            targets = ['\nSummary: ' + t for t in targets]
 
-            full_text = [s+t for s,t in zip(sources,targets)]
-            return full_text, sources, targets
+            full_text = [s + t for s, t in zip(sources, targets)]
 
         if name == 'wiki_bio':
             sources = [json.dumps(dataset[i]['input_text']) for i in range(len(dataset))]
             targets = dataset['target_text']
-            
-            sources = ['Source:\n'+ s for s in sources]
-            targets = ['\nTarget Wiki: '+t for t in targets]
-            
-            full_text = [s+t for s,t in zip(sources,targets)]
-            return full_text, sources, targets
+
+            sources = ['Source:\n' + s for s in sources]
+            targets = ['\nTarget Wiki: ' + t for t in targets]
+
+            full_text = [s + t for s, t in zip(sources, targets)]
 
         if name == 'wiki_qa':
-            sources = ['Title: ' + dataset[i]['document_title'] + ', Question: ' + dataset[i]['question'] for i in range(len(dataset))]
+            sources = ['Title: ' + dataset[i]['document_title'] + ', Question: ' + dataset[i]['question'] for i in
+                       range(len(dataset))]
             targets = dataset['answer']
 
-            sources = [''+ s for s in sources]
-            targets = ['\nAnswer: '+t for t in targets]
-            
-            full_text = [s+t for s,t in zip(sources,targets)]
-            return full_text, sources, targets
+            sources = ['' + s + '?' if s[-1] != '?' else '' + s for s in sources]  # add question mark on questions w/o
+            targets = ['\nAnswer: ' + t for t in targets]
+
+            full_text = [s + t for s, t in zip(sources, targets)]
+
+        if sources is None:
+            raise Exception('Dataset not implemented.')
+
+        df = pd.DataFrame({'input': sources,
+                           'output': targets,
+                           'full_text': full_text})
+
+        # select in dataframe only entries where length of column 'full_text' is smaller than self.max_char_len
+        df = df[df['full_text'].apply(lambda x: len(x) < self.max_char_len)]
+
+        # sample from dataframe num_examples times
+        if self.num_examples > len(df):
+            print('Warning: number of examples is greater than the number of examples in the dataset. '
+                  'Reducing number of examples to the number of examples in the dataset.')
+            self.num_examples = len(df)
+        df = df.sample(n=self.num_examples).reset_index()
+
+        return df
 
     def __len__(self):
         """returns the length of dataframe"""
-        return len(self.target_texts)
+        return len(self.df)
 
     def __getitem__(self, index):
         """return the input ids, attention masks and target ids"""
 
-        full_text = self.full_texts[index]
-        source_text = self.source_texts[index]
-        target_text = self.target_texts[index]
+        full_text = self.df['full_text'][index]
+        source_text = self.df['input'][index]
+        target_text = self.df['output'][index]
 
-        tokenized = self.tokenizer( 
-            full_text, 
-            max_length=self.max_len,
+        tokenized = self.tokenizer(
+            full_text,
+            max_length=self.max_tok_len,
             pad_to_max_length=True,
             truncation=True,
             padding="max_length",
             return_tensors="pt",
         )
-        source = self.tokenizer( 
-            source_text, 
-            max_length=self.max_len,
+        source = self.tokenizer(
+            source_text,
+            max_length=self.max_tok_len,
             pad_to_max_length=True,
             truncation=True,
             padding="max_length",
@@ -118,7 +138,7 @@ class CustomDataset(Dataset):
         )
         target = self.tokenizer(
             target_text,
-            max_length=self.max_len,
+            max_length=self.max_tok_len,
             pad_to_max_length=True,
             truncation=True,
             padding="max_length",
@@ -127,7 +147,7 @@ class CustomDataset(Dataset):
 
         input_ids = tokenized["input_ids"].squeeze()
         attention_mask = tokenized["attention_mask"].squeeze()
-        
+
         source_ids = source["input_ids"].squeeze()
         source_mask = source["attention_mask"].squeeze()
 
@@ -140,6 +160,7 @@ class CustomDataset(Dataset):
             "source_ids"     - the source ids of the data 
             "source_mask"    - the attention mask of source data 
             "target_ids"     - the target ids of the data 
+            "target_mask"    - the attention mask of target data
         '''
         return {
             "input_ids": input_ids.to(dtype=torch.long),

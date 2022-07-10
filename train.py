@@ -31,21 +31,24 @@ class Config:
     n_tokens_p0 = 20
     last_tokens_to_keep = 20
     vocab_size = len(tokenizer)
+    pad_token_id = tokenizer.pad_token_id
 
 
 model_config = Config()
 
 # training configuration
-train_conf = TrainerConfig(max_epochs=1,
+train_conf = TrainerConfig(max_epochs=2,
                            batch_size=16,
-                           learning_rate=0.005,
+                           learning_rate=0.0003,
                            lr_decay=True,
                            warmup_tokens=10,  # 512*20,
                            final_tokens=5000,  # 2*len(train_dataset)*block_size,
                            num_workers=1,
-                           num_examples_per_ds=700,
-                           num_examples_per_test_ds=300,
-                           max_tokenized=200)
+                           num_examples_per_ds=3000,
+                           num_examples_per_test_ds=200,
+                           max_tokenized=200,  # length of tokenized prompt
+                           max_char_len=1000  # max char len of example in ds (longer text is rejected, not truncated)
+                           )
 
 # databases to train on
 ds_names = ["wiki_qa", "wiki_bio", "samsum"]

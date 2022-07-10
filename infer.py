@@ -28,15 +28,28 @@ def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric, max_ste
         input_ids = input_ids[:, :last_loc[-1] + 1]
         attention_mask = attention_mask[:, :last_loc[-1] + 1]
 
-        x_out = sample(model, batch, steps=max_steps_infer, tokenizer=tokenizer, temperature=1, sample=True, top_k=10)
-        x_out = x_out[0, len(batch['source_ids'][0]):]
-        str_pred = ' '.join(
+        # sample from model
+        x_out = sample(model, input_ids, attention_mask, steps=max_steps_infer, tokenizer=tokenizer, temperature=1,
+                       sample=True, top_k=10)
+        x_out = x_out[:, (last_loc[-1] + 1):]  # remove the input tokens
+
+        # convert prediction to string
+        str_pred = ''.join(
             [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=True) for g in x_out])
 
+        # get target string
         last_loc_target = torch.where(batch['target_mask'].squeeze() == 1)[-1]
         target_ids = batch['target_ids'][0][:last_loc_target[-1] + 1]
-        str_ref = ' '.join([tokenizer.decode(g) for g in target_ids])
-        print('pred: ' + str_pred + '\nref:' + str_ref)
+        str_ref = ''.join([tokenizer.decode(g, clean_up_tokenization_spaces=True) for g in target_ids])
+
+        # get target string output
+        last_loc_source = torch.where(batch['source_mask'].squeeze() == 1)[-1]
+        source_ids = batch['source_ids'][0][:last_loc_source[-1] + 1]
+        str_ref_in = ''.join([tokenizer.decode(g, clean_up_tokenization_spaces=True) for g in source_ids])
+
+        print('input: ' + str_ref_in + str_ref)
+        print('pred: ' + str_pred)
+        print('-----------------------------------------------------')
 
         scores_gen_true = metric.compute(predictions=[str_pred], references=[str_ref])
         sum_f1 += scores_gen_true['rouge1'].mid.fmeasure
@@ -57,6 +70,7 @@ class InferConf:
     num_workers = 1
     max_tokenized = 512
     num_examples_per_test_ds = 4
+    max_char_len = 1000
 
 
 class ModelConfig:
@@ -91,7 +105,6 @@ for ds_name_i in ds_names:
 
     print('ds_name: ' + ds_name_i)
     print('score0: ' + str(score0) + '\nscore_p: ' + str(score_p) + '\nscore_px: ' + str(score_px))
-
 
 # combined datasets case
 model0 = GPT2LMHeadModel.from_pretrained(model_config.model_name)

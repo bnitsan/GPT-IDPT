@@ -1,7 +1,8 @@
 import torch
 from torch.nn import CrossEntropyLoss
-import torch.nn as nn   
+import torch.nn as nn
 from transformers import GPT2Model, GPT2LMHeadModel
+
 
 # based on https://github.com/kipgparker/soft-prompt-tuning/blob/main/soft_embedding.py
 class SoftEmbedding(nn.Module):
@@ -42,14 +43,24 @@ class SoftEmbedding(nn.Module):
         Returns:
             torch.float: encoding of text concatenated with learned task specifc embedding
         """
-        input_embedding = self.wte(tokens[:, self.n_tokens:]) # here we run over the first n_tokens
+        # find first pad token index in tokens torch tensor
+        pad_index = tokens.eq(self.padding_idx).nonzero().item()
+
+        print(tokens.shape)
+        input_embedding = self.wte(tokens[:, self.n_tokens:])  # here we run over the first n_tokens
+        print(input_embedding.shape)
         learned_embedding = self.learned_embedding.repeat(input_embedding.size(0), 1, 1)
+        print(learned_embedding.shape)
+        print(torch.cat([learned_embedding, input_embedding], 1).shape)
         return torch.cat([learned_embedding, input_embedding], 1)
+
 
 """
     A module of a GPT2 LM model with a soft learned prompt
     Written by NB 4/7/22
 """
+
+
 class GPT2TrainedPrompt(nn.Module):
     def __init__(self, config):
         """appends learned embedding to a GPT2LMHeadModel
@@ -66,16 +77,13 @@ class GPT2TrainedPrompt(nn.Module):
             param.requires_grad = False
 
         self.model.resize_token_embeddings(self.config.vocab_size)
-        
+
         self.model_dim = self.model.get_input_embeddings().weight.size(1)
 
         self.soft_embed = SoftEmbedding(self.model.get_input_embeddings(),
                                         n_tokens=config.n_tokens_p0,
                                         initialize_from_vocab=False)
         self.model.set_input_embeddings(self.soft_embed)
-
-    def resize_token_embeddings(self, resize_num):
-        self.model.resize_token_embeddings(resize_num)
 
     def initialize_embedding(self):
         """initializes learned embedding
@@ -124,14 +132,17 @@ class GPT2TrainedPrompt(nn.Module):
 
     Written by NB 4/7/22
 """
+
+
 class GPT2TrainedPromptX(nn.Module):
     def __init__(self, config):
         super(GPT2TrainedPromptX, self).__init__()
         self.config = config
-        
+
         # "last tokens to keep" - amount of tokens to pass from initial LM pass in estimating p(x)
         self.last_tokens_to_keep = self.config.last_tokens_to_keep
 
+        # load GPT2 models and freeze all their parameters
         self.model_prompt = GPT2Model.from_pretrained(config.model_name)  # model used in the prompt generation
         self.model = GPT2LMHeadModel.from_pretrained(config.model_name)  # model used after prompt
         for param in self.model_prompt.parameters():
@@ -139,25 +150,23 @@ class GPT2TrainedPromptX(nn.Module):
         for param in self.model.parameters():
             param.requires_grad = False
 
-        
+        # resize tokenizer to include the new tokens (pad token by default)
         self.model.resize_token_embeddings(self.config.vocab_size)
         self.model_prompt.resize_token_embeddings(self.config.vocab_size)
 
         self.model_dim = self.model_prompt.get_input_embeddings().weight.size(1)
 
+        # define a soft trainable embedding, acting as a learned prompt
         self.soft_embed = SoftEmbedding(self.model_prompt.get_input_embeddings(),
                                         n_tokens=config.n_tokens_p0,
                                         initialize_from_vocab=False)
         self.model_prompt.set_input_embeddings(self.soft_embed)
 
-        self.self_att = nn.MultiheadAttention(self.model_dim, num_heads=1, dropout=0.1)  # single attention layer; may extend later for sequential, multiple heads, etc.
-
-    def resize_token_embeddings(self, resize_num):
-        self.model.resize_token_embeddings(resize_num)
-        self.model_prompt.resize_token_embeddings(resize_num)
+        # single attention layer; may extend later for sequential, multiple heads, etc.
+        self.self_att = nn.MultiheadAttention(self.model_dim, num_heads=1, dropout=0.1)
 
     def initialize_embedding(self):
-        """initializes learned embedding
+        """initializes learned embeddings
         Args:
             same as __init__
         Returns:
@@ -166,7 +175,7 @@ class GPT2TrainedPromptX(nn.Module):
         if self.initialize_from_vocab:
             return self.wte.weight[:self.n_tokens].clone().detach()
         return torch.FloatTensor(self.n_tokens, self.wte.weight.size(1)).uniform_(-self.random_range, self.random_range)
-    
+
     def forward(self, input_ids, attention_mask, labels=None, return_dict=False):
         """run forward pass
         Args:
@@ -186,17 +195,17 @@ class GPT2TrainedPromptX(nn.Module):
         )
         hidden_states = prompt_transformer_outputs[0]
 
-        p_x = hidden_states[:,-self.last_tokens_to_keep:,:]  # Batch X (Tokens + last_tokens_to_keep) X n_embd
-
+        p_x = hidden_states[:, -self.last_tokens_to_keep:, :]  # Batch X (Tokens + last_tokens_to_keep) X n_embd
 
         '''
             Second part: embed x and concatenate the embedding with p(x): [p(x) x]
         '''
         input_ids_emb = self.model.transformer.wte(input_ids)  # embed input
-        
+
         new_input_emb = torch.cat([p_x, input_ids_emb], 1)  # Batch X (Tokens + last_tokens_to_keep) X n_embd
 
-        att_mask_px = torch.ones(attention_mask.shape[0], self.last_tokens_to_keep).to(attention_mask.device)  #self.last_tokens_to_keep
+        att_mask_px = torch.ones(attention_mask.shape[0], self.last_tokens_to_keep).to(
+            attention_mask.device)  # self.last_tokens_to_keep
 
         new_attention_mask = torch.cat([att_mask_px, attention_mask], 1)
 
@@ -209,9 +218,8 @@ class GPT2TrainedPromptX(nn.Module):
         '''
             Third part: compare logits to labels if existing, compute loss
         '''
-        
-        lm_logits = transformer_outputs[0]
 
+        lm_logits = transformer_outputs[0]
 
         # Set device for model parallelism
         # if self.model_parallel:
@@ -233,7 +241,7 @@ class GPT2TrainedPromptX(nn.Module):
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
         if not return_dict:
-            output = (lm_logits,) #+ transformer_outputs[1:]
+            output = (lm_logits,)  # + transformer_outputs[1:]
             return ((loss,) + output) if loss is not None else output
         else:
             raise NotImplementedError("return_dict=True is not implemented.")
