@@ -5,14 +5,12 @@ import random
 from datasets import load_dataset
 import pandas as pd
 
-# random.seed(0)
-
 
 class CustomDataset(Dataset):
     """
-    Creating a custom dataset for reading the dataset and
+    Creating a custom dataset for reading a dataset, before
     loading it into the dataloader to pass it to the
-    neural network for finetuning the model
+    neural network for finetuning/inference on the model
     """
 
     def __init__(self, ds_name, tokenizer, num_examples, split_type, max_tok_len=512, max_char_len=1500):
@@ -86,6 +84,24 @@ class CustomDataset(Dataset):
             targets = dataset['answer']
 
             sources = ['' + s + '?' if s[-1] != '?' else '' + s for s in sources]  # add question mark on questions w/o
+            targets = ['\nAnswer: ' + t for t in targets]
+
+            full_text = [s + t for s, t in zip(sources, targets)]
+
+        if name == 'rotten_tomatoes':
+            sources = [dataset[i]['text'] for i in range(len(dataset))]
+            targets = ['Positive' if dataset[i]['label'] == 1 else 'Negative' for i in range(len(dataset))]
+
+            sources = ['Review text: ' + s for s in sources]  # add question mark on questions w/o
+            targets = ['\nSentiment: ' + t for t in targets]
+
+            full_text = [s + t for s, t in zip(sources, targets)]
+
+        if name == 'quartz':
+            sources = [dataset[i]['question'] + ('...' if '.' not in dataset[i]['question'][-2:] else '') +' Options are A: ' + dataset[i]['choices']['text'][0] + ' or B: ' + dataset[i]['choices']['text'][1] for i in range(len(dataset))]
+            targets = [dataset[i]['answerKey'] for i in range(len(dataset))]
+
+            sources = ['Complete: ' + s for s in sources]  # add question mark on questions w/o
             targets = ['\nAnswer: ' + t for t in targets]
 
             full_text = [s + t for s, t in zip(sources, targets)]
