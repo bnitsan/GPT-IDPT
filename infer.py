@@ -1,23 +1,22 @@
 from models.utils import sample
 from datasets import load_metric
 import torch
-from models.trainer import TrainerConfig
-from models.dataset import CustomDataset
-from torch.utils.data import DataLoader
-from transformers import GPT2TokenizerFast
 from transformers import GPT2LMHeadModel
-from models.models import GPT2TrainedPrompt, GPT2TrainedPromptX
+from models.model_prompt_tuning import GPT2PromptTuningLM, GPT2IDPTLM
 from models.utils import get_val_dl
+from config import ModelConfig, InferConfig, get_tokenizer
+
+print_flag = True
 
 
-def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric, max_steps_infer=10):
-    # load state dict to model
-    if isinstance(ds_name, list):
-        model.load_state_dict(torch.load('model_weights/' + model_name + '_combined_state_dict.pt'))
-    else:
-        model.load_state_dict(torch.load('model_weights/' + model_name + '_' + ds_name + '_state_dict.pt'))
-    print(ds_name)
+def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric):
+    model.eval()
+    print('Now evaluating model: ' + model_name)
+    print('On dataset: ' + ds_name) if not isinstance(ds_name, list) else print('On combined dataset')
+    print('-----------------------------------------------------')
+
     val_dataloader = get_val_dl(ds_name, tokenizer, infer_conf)
+    max_steps_infer = infer_conf.max_steps_infer
     sum_f1 = 0
     for i, batch in enumerate(val_dataloader):
         input_ids = batch['source_ids']
@@ -30,8 +29,9 @@ def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric, max_ste
 
         # sample from model
         x_out = sample(model, input_ids, attention_mask, steps=max_steps_infer, tokenizer=tokenizer, temperature=1,
-                       sample=True, top_k=10)
-        x_out = x_out[:, (last_loc[-1] + 1):]  # remove the input tokens
+                       sample_flag=True, top_k=10)
+        # remove the input tokens
+        x_out = x_out[:, (last_loc[-1] + 1):]
 
         # convert prediction to string
         str_pred = ''.join(
@@ -47,9 +47,10 @@ def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric, max_ste
         source_ids = batch['source_ids'][0][:last_loc_source[-1] + 1]
         str_ref_in = ''.join([tokenizer.decode(g, clean_up_tokenization_spaces=True) for g in source_ids])
 
-        print('input: ' + str_ref_in + str_ref)
-        print('pred: ' + str_pred)
-        print('-----------------------------------------------------')
+        if print_flag:
+            print('input: ' + str_ref_in + str_ref)
+            print('pred: ' + str_pred)
+            print('-----------------------------------------------------')
 
         scores_gen_true = metric.compute(predictions=[str_pred], references=[str_ref])
         sum_f1 += scores_gen_true['rouge1'].mid.fmeasure
@@ -57,31 +58,10 @@ def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric, max_ste
     return sum_f1 / (i + 1)
 
 
-base_model_name = 'distilgpt2'
-
-# define tokenizer, extend with pad token
-tokenizer = GPT2TokenizerFast.from_pretrained(base_model_name)
-if tokenizer.pad_token is None:
-    tokenizer.add_special_tokens({'pad_token': '<PAD>'})
-
-
-class InferConf:
-    batch_size = 1  #
-    num_workers = 1
-    max_tokenized = 512
-    num_examples_per_test_ds = 4
-    max_char_len = 1000
-
-
-class ModelConfig:
-    model_name = base_model_name
-    n_tokens_p0 = 20
-    last_tokens_to_keep = 20
-    vocab_size = len(tokenizer)
-
-
-infer_config = InferConf()
-model_config = ModelConfig()
+tokenizer = get_tokenizer()
+infer_config = InferConfig()
+model_config = ModelConfig(vocab_size=len(tokenizer),
+                           pad_token_id=tokenizer.pad_token_id)
 
 ds_names = ["wiki_qa", "wiki_bio", "samsum"]
 
@@ -93,30 +73,60 @@ for ds_name_i in ds_names:
     # model 1: "ultra"-baseline - a simple GPT2 with LM head with no prompt tuning
     model0 = GPT2LMHeadModel.from_pretrained(model_config.model_name)
     model0.resize_token_embeddings(len(tokenizer))
-    score0 = get_score(model0, 'model0', ds_name_i, tokenizer, infer_config, rouge_score, max_steps_infer=10)
+    model0.load_state_dict(torch.load('model_weights/model0_' + ds_name_i + '_state_dict.pt'))
+    score0 = get_score(model0, 'model0', ds_name_i, tokenizer, infer_config, rouge_score)
 
     # model 2: baseline - a GPT2 with trained prompt
-    model_p = GPT2TrainedPrompt(model_config)
-    score_p = get_score(model_p, 'model_p', ds_name_i, tokenizer, infer_config, rouge_score, max_steps_infer=10)
+    model_p = GPT2PromptTuningLM.from_pretrained(
+        model_config.model_name,
+        weights_path='model_p_' + ds_name_i + '_state_dict.pt',
+        n_tokens=model_config.n_tokens_0,
+        initialize_from_vocab=model_config.init_from_vocab,
+        vocab_size=model_config.vocab_size
+    )
+    score_p = get_score(model_p, 'model_p', ds_name_i, tokenizer, infer_config, rouge_score)
 
     # model 3: "ID-PT"-style - a GPT2 with input-dependent trained prompt
-    model_px = GPT2TrainedPromptX(model_config)
-    score_px = get_score(model_px, 'model_px', ds_name_i, tokenizer, infer_config, rouge_score, max_steps_infer=10)
+    model_px = GPT2IDPTLM.from_pretrained(
+        model_config.model_name,
+        weights_path='model_px_'+ ds_name_i +'_state_dict.pt',
+        n_tokens_0=model_config.n_tokens_0,
+        n_tokens_IDPT=model_config.n_tokens_IDPT,
+        initialize_from_vocab=model_config.init_from_vocab,
+        vocab_size=model_config.vocab_size
+    )
+    score_px = get_score(model_px, 'model_px', ds_name_i, tokenizer, infer_config, rouge_score)
 
     print('ds_name: ' + ds_name_i)
     print('score0: ' + str(score0) + '\nscore_p: ' + str(score_p) + '\nscore_px: ' + str(score_px))
 
+    import sys
+    sys.exit()
 # combined datasets case
 model0 = GPT2LMHeadModel.from_pretrained(model_config.model_name)
 model0.resize_token_embeddings(len(tokenizer))
-score0 = get_score(model0, 'model0', ds_names, tokenizer, infer_config, rouge_score, max_steps_infer=10)
+model0.load_state_dict(torch.load('model_weights/model0_combined_state_dict.pt'))
+score0 = get_score(model0, 'model0', ds_names, tokenizer, infer_config, rouge_score)
 
 # model 2: baseline - a GPT2 with trained prompt
-model_p = GPT2TrainedPrompt(model_config)
-score_p = get_score(model_p, 'model_p', ds_names, tokenizer, infer_config, rouge_score, max_steps_infer=10)
+model_p = GPT2PromptTuningLM.from_pretrained(
+    model_config.model_name,
+    weights_path='model_p_combined_state_dict.pt',
+    n_tokens=model_config.n_tokens_0,
+    initialize_from_vocab=model_config.init_from_vocab,
+    vocab_size=model_config.vocab_size
+)
+score_p = get_score(model_p, 'model_p', ds_names, tokenizer, infer_config, rouge_score)
 
 # model 3: "ID-PT"-style - a GPT2 with input-dependent trained prompt
-model_px = GPT2TrainedPromptX(model_config)
-score_px = get_score(model_px, 'model_px', ds_names, tokenizer, infer_config, rouge_score, max_steps_infer=10)
+model_px = GPT2IDPTLM.from_pretrained(
+    model_config.model_name,
+    weights_path='model_px_combined_state_dict.pt',
+    n_tokens_0=model_config.n_tokens_0,
+    n_tokens_IDPT=model_config.n_tokens_IDPT,
+    initialize_from_vocab=model_config.init_from_vocab,
+    vocab_size=model_config.vocab_size
+)
+score_px = get_score(model_px, 'model_px', ds_names, tokenizer, infer_config, rouge_score)
 
 print('COMBINED SET:\nscore0: ' + str(score0) + '\nscore_p: ' + str(score_p) + '\nscore_px: ' + str(score_px))
