@@ -6,7 +6,15 @@ from models.model_prompt_tuning import GPT2PromptTuningLM, GPT2IDPTLM
 from models.utils import get_val_dl
 from config import ModelConfig, InferConfig, get_tokenizer
 
-print_flag = True
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--val_num', type=int, required=True)
+parser.add_argument('--tokens0', type=int, default=20)
+parser.add_argument('--tokensIDPT', type=int, default=20)
+args = parser.parse_args()
+
+
+print_flag = False
 
 
 def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric):
@@ -28,7 +36,7 @@ def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric):
         attention_mask = attention_mask[:, :last_loc[-1] + 1]
 
         # sample from model
-        x_out = sample(model, input_ids, attention_mask, steps=max_steps_infer, tokenizer=tokenizer, temperature=1,
+        x_out = sample(model, input_ids, attention_mask, steps=max_steps_infer, tokenizer=tokenizer, temperature=0.8,
                        sample_flag=True, top_k=10)
         # remove the input tokens
         x_out = x_out[:, (last_loc[-1] + 1):]
@@ -60,19 +68,26 @@ def get_score(model, model_name, ds_name, tokenizer, infer_conf, metric):
 
 tokenizer = get_tokenizer()
 infer_config = InferConfig()
+infer_config.num_examples_per_test_ds = args.val_num
 model_config = ModelConfig(vocab_size=len(tokenizer),
                            pad_token_id=tokenizer.pad_token_id)
+model_config.n_tokens_0 = args.tokens0
+model_config.n_tokens_IDPT = args.tokensIDPT
 
-ds_names = ["wiki_qa", "wiki_bio", "samsum"]
+ds_names = ["rotten_tomatoes", "quartz", "samsum"]  # other possible: "wiki_qa", "wiki_bio"
+max_steps_per_db = [5, 4, 100]
 
 # We adopt for now the ROUGE metric for scoring. It is not conventional, but it is easy to implement.
 # In some cases, researchers even use "exact match" score.
 rouge_score = load_metric("rouge")
 
-for ds_name_i in ds_names:
+for i, ds_name_i in enumerate(ds_names):
+    # every ds should be evaluated with different max steps in inference, for cleaner results
+    infer_config.max_steps_infer = max_steps_per_db[i]
+
     # model 1: "ultra"-baseline - a simple GPT2 with LM head with no prompt tuning
     model0 = GPT2LMHeadModel.from_pretrained(model_config.model_name)
-    model0.resize_token_embeddings(len(tokenizer))
+    # model0.resize_token_embeddings(len(tokenizer))
     model0.load_state_dict(torch.load('model_weights/model0_' + ds_name_i + '_state_dict.pt'))
     score0 = get_score(model0, 'model0', ds_name_i, tokenizer, infer_config, rouge_score)
 
@@ -89,7 +104,7 @@ for ds_name_i in ds_names:
     # model 3: "ID-PT"-style - a GPT2 with input-dependent trained prompt
     model_px = GPT2IDPTLM.from_pretrained(
         model_config.model_name,
-        weights_path='model_px_'+ ds_name_i +'_state_dict.pt',
+        weights_path='model_px_' + ds_name_i + '_state_dict.pt',
         n_tokens_0=model_config.n_tokens_0,
         n_tokens_IDPT=model_config.n_tokens_IDPT,
         initialize_from_vocab=model_config.init_from_vocab,
@@ -100,11 +115,14 @@ for ds_name_i in ds_names:
     print('ds_name: ' + ds_name_i)
     print('score0: ' + str(score0) + '\nscore_p: ' + str(score_p) + '\nscore_px: ' + str(score_px))
 
-    import sys
-    sys.exit()
+
+# Combined datasets
+infer_config.max_steps_infer = 5  # restrict to 4 steps, use only two datasets
+ds_names = ["quartz", "rotten_tomatoes"]
+
 # combined datasets case
 model0 = GPT2LMHeadModel.from_pretrained(model_config.model_name)
-model0.resize_token_embeddings(len(tokenizer))
+# model0.resize_token_embeddings(len(tokenizer))
 model0.load_state_dict(torch.load('model_weights/model0_combined_state_dict.pt'))
 score0 = get_score(model0, 'model0', ds_names, tokenizer, infer_config, rouge_score)
 

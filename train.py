@@ -9,8 +9,8 @@ from models.utils import train_model_db, train_model_concat
 from transformers import GPT2LMHeadModel
 from models.model_prompt_tuning import GPT2PromptTuningLM, GPT2IDPTLM
 from config import ModelConfig, get_train_conf, get_tokenizer
-import argparse
 
+import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch', type=int, required=True)
 parser.add_argument('--epochs', type=int, required=True)
@@ -20,7 +20,7 @@ parser.add_argument('--test_num', type=int, required=True)
 parser.add_argument('--tokens0', type=int, default=20)
 parser.add_argument('--tokensIDPT', type=int, default=20)
 args = parser.parse_args()
-# save parser input string
+
 
 tokenizer = get_tokenizer()
 
